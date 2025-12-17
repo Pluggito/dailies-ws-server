@@ -1,7 +1,9 @@
 import { WebSocketServer, WebSocket } from "ws";
+import http from "http";
 import dotenv from "dotenv";
-dotenv.config();
 import axios from "axios";
+
+dotenv.config();
 
 interface ExtendedWebSocket extends WebSocket {
   userId?: string;
@@ -10,9 +12,28 @@ interface ExtendedWebSocket extends WebSocket {
 }
 
 // Use PORT from environment (Render provides this)
-const PORT = process.env.PORT || 8080;
+const PORT = process.env.PORT || 8085;
 
-const wss = new WebSocketServer({ port: Number(PORT) });
+// Create HTTP server first (required for Render)
+const server = http.createServer((req, res) => {
+  if (req.url === "/health") {
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(
+      JSON.stringify({
+        status: "ok",
+        connections: wss.clients.size,
+        users: userConnections.size,
+        rooms: roomConnections.size,
+      })
+    );
+  } else {
+    res.writeHead(200, { "Content-Type": "text/plain" });
+    res.end("WebSocket Server Running");
+  }
+});
+
+// Create WebSocket server attached to HTTP server
+const wss = new WebSocketServer({ server });
 
 // Store connections by userId for direct messaging
 const userConnections = new Map<string, Set<ExtendedWebSocket>>();
@@ -27,7 +48,7 @@ const messageRateLimits = new Map<
 >();
 const MAX_MESSAGES_PER_MINUTE = 60;
 
-console.log(`🚀 WebSocket server running on port ${PORT}`);
+console.log(`🚀 WebSocket server starting on port ${PORT}`);
 console.log("📡 Broadcasting only - Database writes handled by API");
 
 // ==================== UTILITY FUNCTIONS ====================
@@ -62,13 +83,14 @@ function checkRateLimit(userId: string): boolean {
 const HEARTBEAT_INTERVAL = 30000;
 
 const interval = setInterval(() => {
-  wss.clients.forEach((ws: ExtendedWebSocket) => {
-    if (ws.isAlive === false) {
-      console.log(`💀 Terminating dead connection for user ${ws.userId}`);
-      return ws.terminate();
+  wss.clients.forEach((ws: WebSocket) => {
+    const extWs = ws as ExtendedWebSocket;
+    if (extWs.isAlive === false) {
+      console.log(`💀 Terminating dead connection for user ${extWs.userId}`);
+      return extWs.terminate();
     }
-    ws.isAlive = false;
-    ws.ping();
+    extWs.isAlive = false;
+    extWs.ping();
   });
 }, HEARTBEAT_INTERVAL);
 
@@ -77,17 +99,18 @@ wss.on("close", () => {
 });
 
 // ==================== CONNECTION HANDLER ====================
-wss.on("connection", (ws: ExtendedWebSocket, req) => {
+wss.on("connection", (ws: WebSocket, req) => {
+  const extWs = ws as ExtendedWebSocket;
   console.log("✅ Client connected");
 
-  ws.isAlive = true;
-  ws.on("pong", heartbeat);
+  extWs.isAlive = true;
+  extWs.on("pong", heartbeat);
 
   // Connection timeout
   const connectionTimeout = setTimeout(() => {
-    if (!ws.userId) {
+    if (!extWs.userId) {
       console.log("⏰ Connection timeout - no userId provided");
-      ws.close(4000, "Connection timeout");
+      extWs.close(4000, "Connection timeout");
     }
   }, 10000);
 
@@ -97,48 +120,48 @@ wss.on("connection", (ws: ExtendedWebSocket, req) => {
 
   if (userId) {
     clearTimeout(connectionTimeout);
-    ws.userId = userId;
-    ws.chatRooms = new Set();
+    extWs.userId = userId;
+    extWs.chatRooms = new Set();
 
     // Add to user connections
     if (!userConnections.has(userId)) {
       userConnections.set(userId, new Set());
     }
-    userConnections.get(userId)?.add(ws);
+    userConnections.get(userId)?.add(extWs);
 
     console.log(
       `👤 User ${userId} connected (Total: ${userConnections.size} users)`
     );
   }
 
-  ws.on("message", async (data: Buffer) => {
+  extWs.on("message", async (data: Buffer) => {
     try {
       const message = JSON.parse(data.toString());
       const { type, payload } = message;
 
       switch (type) {
         case "joinRoom":
-          handleJoinRoom(ws, payload);
+          handleJoinRoom(extWs, payload);
           break;
 
         case "leaveRoom":
-          handleLeaveRoom(ws, payload);
+          handleLeaveRoom(extWs, payload);
           break;
 
         case "message:send":
-          await handleSendMessage(ws, payload);
+          await handleSendMessage(extWs, payload);
           break;
 
         case "typing:start":
-          handleTypingStart(ws, payload);
+          handleTypingStart(extWs, payload);
           break;
 
         case "typing:stop":
-          handleTypingStop(ws, payload);
+          handleTypingStop(extWs, payload);
           break;
 
         case "messages:read":
-          await handleMessagesRead(ws, payload);
+          await handleMessagesRead(extWs, payload);
           break;
 
         default:
@@ -146,7 +169,7 @@ wss.on("connection", (ws: ExtendedWebSocket, req) => {
       }
     } catch (error) {
       console.error("Error handling message:", error);
-      ws.send(
+      extWs.send(
         JSON.stringify({
           type: "error",
           payload: { message: "Invalid message format" },
@@ -155,30 +178,30 @@ wss.on("connection", (ws: ExtendedWebSocket, req) => {
     }
   });
 
-  ws.on("close", () => {
+  extWs.on("close", () => {
     console.log("❌ Client disconnected");
-    if (ws.userId) {
+    if (extWs.userId) {
       // Remove from user connections
-      const userWs = userConnections.get(ws.userId);
+      const userWs = userConnections.get(extWs.userId);
       if (userWs) {
-        userWs.delete(ws);
+        userWs.delete(extWs);
         if (userWs.size === 0) {
-          userConnections.delete(ws.userId);
+          userConnections.delete(extWs.userId);
         }
       }
 
       // Remove from all rooms and clear typing indicators
-      ws.chatRooms?.forEach((roomId) => {
+      extWs.chatRooms?.forEach((roomId) => {
         const roomWs = roomConnections.get(roomId);
         if (roomWs) {
-          roomWs.delete(ws);
+          roomWs.delete(extWs);
           if (roomWs.size === 0) {
             roomConnections.delete(roomId);
           }
         }
 
         // Clear typing indicator
-        const typingKey = `${ws.userId}:${roomId}`;
+        const typingKey = `${extWs.userId}:${roomId}`;
         const timeout = typingTimeouts.get(typingKey);
         if (timeout) {
           clearTimeout(timeout);
@@ -188,17 +211,17 @@ wss.on("connection", (ws: ExtendedWebSocket, req) => {
         // Notify others that user stopped typing
         broadcastToRoom(roomId, {
           type: "typing:hide",
-          payload: { chatRoomId: roomId, userId: ws.userId },
+          payload: { chatRoomId: roomId, userId: extWs.userId },
         });
       });
 
       console.log(
-        `👋 User ${ws.userId} disconnected (Remaining: ${userConnections.size} users)`
+        `👋 User ${extWs.userId} disconnected (Remaining: ${userConnections.size} users)`
       );
     }
   });
 
-  ws.on("error", (error) => {
+  extWs.on("error", (error) => {
     console.error("WebSocket error:", error);
   });
 });
@@ -452,29 +475,23 @@ async function handleMessagesRead(ws: ExtendedWebSocket, payload: any) {
       `📖 User ${userId} marking messages as read in room ${chatRoomId}`
     );
 
-    // Call API to mark messages as read
+    // Call API to mark messages as read (using axios for consistency)
     const apiUrl = process.env.API_URL || "http://localhost:3000";
-    const response = await fetch(
+    const response = await axios.post(
       `${apiUrl}/api/chatroom/${chatRoomId}/messages/unread`,
       {
-        method: "POST",
+        userId,
+        messageIds,
+      },
+      {
         headers: {
           "Content-Type": "application/json",
           "x-api-secret": process.env.API_SECRET || "development-secret-key",
         },
-        body: JSON.stringify({
-          userId,
-          messageIds,
-        }),
       }
     );
 
-    if (!response.ok) {
-      throw new Error(`API responded with status ${response.status}`);
-    }
-
-    const result = await response.json();
-    console.log(`✅ Marked ${result.markedCount} messages as read`);
+    console.log(`✅ Marked ${response.data.markedCount} messages as read`);
 
     // Broadcast read receipt to other members in the room
     broadcastToRoom(
@@ -531,7 +548,10 @@ function gracefulShutdown() {
   // Close WebSocket server
   wss.close(() => {
     console.log("✅ WebSocket server closed");
-    process.exit(0);
+    server.close(() => {
+      console.log("✅ HTTP server closed");
+      process.exit(0);
+    });
   });
 }
 
@@ -541,3 +561,14 @@ setInterval(() => {
     `📊 Stats: ${userConnections.size} users, ${roomConnections.size} active rooms`
   );
 }, 300000); // Every 5 minutes
+
+// ==================== START SERVER ====================
+server.listen(PORT, () => {
+  console.log(`
+╔════════════════════════════════════════╗
+║   WebSocket Server Started             ║
+║   Port: ${PORT}                        
+║   Health: http://localhost:${PORT}/health 
+╚════════════════════════════════════════╝
+  `);
+});

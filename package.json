@@ -2,15 +2,14 @@
   "name": "websocket-server",
   "version": "1.0.0",
   "description": "WebSocket server for real-time chat",
-  "main": "ws-server.js",
+  "main": "dist/server.js",
   "scripts": {
-    "dev": "tsx watch ws-server.ts",
+    "dev": "tsx watch src/server.ts",
     "build": "tsc",
-    "start": "node ws-server.js",
-    "clean": "rm -f *.js *.js.map"
+    "start": "node dist/server.js",
+    "clean": "rm -rf dist"
   },
   "keywords": ["websocket", "chat", "realtime"],
-  "author": "",
   "license": "MIT",
   "dependencies": {
     "ws": "^8.18.0",
