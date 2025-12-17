@@ -3,7 +3,7 @@ services:
     name: ws-server
     env: node
     buildCommand: npm install && npm run build
-    startCommand: node ws-server.js
+    startCommand: npm start
     envVars:
       - key: PORT
         value: 10000
