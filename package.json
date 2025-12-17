@@ -1,0 +1,29 @@
+{
+  "name": "websocket-server",
+  "version": "1.0.0",
+  "description": "WebSocket server for real-time chat",
+  "main": "ws-server.js",
+  "scripts": {
+    "dev": "tsx watch ws-server.ts",
+    "build": "tsc",
+    "start": "node ws-server.js",
+    "clean": "rm -f *.js *.js.map"
+  },
+  "keywords": ["websocket", "chat", "realtime"],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "ws": "^8.18.0",
+    "dotenv": "^16.4.5",
+    "axios": "^1.7.2"
+  },
+  "devDependencies": {
+    "@types/node": "^20.12.12",
+    "@types/ws": "^8.5.10",
+    "typescript": "^5.4.5",
+    "tsx": "^4.11.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
